@@ -92,36 +92,46 @@ st.markdown("<div class='main-wrap'>", unsafe_allow_html=True)
 # --------------------------------------------------
 # Helpers: forecasting, rfm, etc.
 # --------------------------------------------------
+
+
 def prepare_weekly_series(d):
     d = d.copy()
     d['invoicedate'] = pd.to_datetime(d['invoicedate'], errors='coerce')
     d = d.set_index('invoicedate').sort_index()
-    weekly = d['sales'].resample('W-MON').sum().reset_index().rename(columns={'invoicedate':'ds','sales':'y'})
-    weekly['ds'] = pd.to_datetime(weekly['ds']).dt.to_period('W').apply(lambda p: p.start_time)
+    weekly = d['sales'].resample(
+        'W-MON').sum().reset_index().rename(columns={'invoicedate': 'ds', 'sales': 'y'})
+    weekly['ds'] = pd.to_datetime(weekly['ds']).dt.to_period(
+        'W').apply(lambda p: p.start_time)
     return weekly
 
+
 def train_sarimax(weekly):
-    model = SARIMAX(weekly['y'], order=(1,1,1), seasonal_order=(0,1,1,52),
+    model = SARIMAX(weekly['y'], order=(1, 1, 1), seasonal_order=(0, 1, 1, 5),
                     enforce_stationarity=False, enforce_invertibility=False)
     res = model.fit(disp=False)
     return res
+
 
 def forecast_sarimax(res, steps=4):
     pred = res.get_forecast(steps=steps)
     return pred.predicted_mean.values
 
-def create_lag_features_weekly(weekly, lags=[1,2,3,4,6,8,12]):
+
+def create_lag_features_weekly(weekly, lags=[1, 2, 3, 4, 6, 8, 12]):
     df_ = weekly.copy()
     for lag in lags:
         df_[f'lag_{lag}'] = df_['y'].shift(lag)
     return df_.dropna().reset_index(drop=True)
 
+
 def train_xgb(weekly):
     df_ = create_lag_features_weekly(weekly)
     feat_cols = [c for c in df_.columns if c.startswith('lag_')]
-    model = xgb.XGBRegressor(n_estimators=200, max_depth=5, learning_rate=0.05, random_state=42)
+    model = xgb.XGBRegressor(
+        n_estimators=200, max_depth=5, learning_rate=0.05, random_state=42)
     model.fit(df_[feat_cols], df_['y'])
     return model, feat_cols
+
 
 def forecast_xgb(model, weekly, feat_cols, steps=4):
     history = weekly['y'].tolist()
@@ -130,11 +140,13 @@ def forecast_xgb(model, weekly, feat_cols, steps=4):
         fv = []
         for f in feat_cols:
             lag = int(f.split('_')[1])
-            fv.append(history[-lag] if lag <= len(history) else np.mean(history))
-        p = model.predict(np.array(fv).reshape(1,-1))[0]
+            fv.append(history[-lag] if lag <=
+                      len(history) else np.mean(history))
+        p = model.predict(np.array(fv).reshape(1, -1))[0]
         preds.append(float(p))
         history.append(p)
     return preds
+
 
 def rfm_analysis(df):
     d = df.copy()
@@ -144,23 +156,30 @@ def rfm_analysis(df):
         'invoicedate': lambda x: (snapshot - x.max()).days,
         'customerid': 'count',
         'sales': 'sum'
-    }).rename(columns={'invoicedate':'recency','customerid':'frequency','sales':'monetary'})
-    rfm['recency_score'] = pd.qcut(rfm['recency'], 4, labels=[4,3,2,1]).astype(int)
-    rfm['frequency_score'] = pd.qcut(rfm['frequency'].rank(method='first'), 4, labels=[1,2,3,4]).astype(int)
-    rfm['monetary_score'] = pd.qcut(rfm['monetary'], 4, labels=[1,2,3,4]).astype(int)
-    rfm['rfm_score'] = rfm['recency_score']*100 + rfm['frequency_score']*10 + rfm['monetary_score']
+    }).rename(columns={'invoicedate': 'recency', 'customerid': 'frequency', 'sales': 'monetary'})
+    rfm['recency_score'] = pd.qcut(rfm['recency'], 4, labels=[
+                                   4, 3, 2, 1]).astype(int)
+    rfm['frequency_score'] = pd.qcut(rfm['frequency'].rank(
+        method='first'), 4, labels=[1, 2, 3, 4]).astype(int)
+    rfm['monetary_score'] = pd.qcut(
+        rfm['monetary'], 4, labels=[1, 2, 3, 4]).astype(int)
+    rfm['rfm_score'] = rfm['recency_score']*100 + \
+        rfm['frequency_score']*10 + rfm['monetary_score']
     return rfm.reset_index()
 
+
 def segmentation_kmeans(rfm_df, n_clusters=4):
-    X = rfm_df[['recency','frequency','monetary']]
+    X = rfm_df[['recency', 'frequency', 'monetary']]
     scaler = StandardScaler()
     Xs = scaler.fit_transform(X)
     km = KMeans(n_clusters=n_clusters, random_state=42).fit(Xs)
     rfm_df['segment'] = km.labels_
-    order = rfm_df.groupby('segment')['monetary'].mean().sort_values(ascending=False).index
+    order = rfm_df.groupby('segment')['monetary'].mean(
+    ).sort_values(ascending=False).index
     mapping = {seg: f"Segment_{i+1}" for i, seg in enumerate(order)}
     rfm_df['segment_label'] = rfm_df['segment'].map(mapping)
     return rfm_df
+
 
 def top_products_last_n_days(df, days=60):
     cutoff = pd.to_datetime(df['invoicedate']).max() - pd.Timedelta(days=days)
@@ -168,16 +187,21 @@ def top_products_last_n_days(df, days=60):
     key = 'stockcode' if 'stockcode' in recent.columns else 'description'
     return recent.groupby(key)['sales'].sum().reset_index().sort_values('sales', ascending=False)
 
+
 def retention_rate(df):
-    first = df.groupby('customerid')['invoicedate'].min().reset_index().rename(columns={'invoicedate':'first_date'})
+    first = df.groupby('customerid')['invoicedate'].min(
+    ).reset_index().rename(columns={'invoicedate': 'first_date'})
     merged = df.merge(first, on='customerid', how='left')
-    merged['is_repeat'] = pd.to_datetime(merged['invoicedate']) > pd.to_datetime(merged['first_date'])
+    merged['is_repeat'] = pd.to_datetime(
+        merged['invoicedate']) > pd.to_datetime(merged['first_date'])
     return merged.groupby('customerid')['is_repeat'].any().mean()
+
 
 def compute_hash_bytes(b: bytes):
     h = hashlib.sha256()
     h.update(b)
     return h.hexdigest()
+
 
 def merkle_root_from_ids(ids):
     if len(ids) == 0:
@@ -192,12 +216,14 @@ def merkle_root_from_ids(ids):
         leaves = new_level
     return hashlib.sha256(leaves[0]).hexdigest()
 
+
 # --------------------------------------------------
 # Load dataset — uploaded or fallback local path
 # --------------------------------------------------
 DEFAULT_PATH = "/mnt/data/cleaned_online_retail.xlsx"  # <-- your uploaded file path
 
-uploaded = st.file_uploader("Upload dataset (.csv or .xlsx). If none, app will try the demo file at /mnt/data/cleaned_online_retail.xlsx", type=['csv','xlsx'])
+uploaded = st.file_uploader(
+    "Upload dataset (.csv or .xlsx). If none, app will try the demo file at /mnt/data/cleaned_online_retail.xlsx", type=['csv', 'xlsx'])
 
 raw_bytes = None
 if uploaded is not None:
@@ -232,7 +258,8 @@ else:
 # --------------------------------------------------
 if 'customerid' in raw.columns:
     # Convert to string and strip trailing .0 if present
-    raw['customerid'] = raw['customerid'].astype(str).str.replace('.0$', '', regex=True).str.strip()
+    raw['customerid'] = raw['customerid'].astype(
+        str).str.replace('.0$', '', regex=True).str.strip()
 
 # If invoice date column named slightly different, try to find it (but in your dataset it's 'invoicedate')
 # We'll trust 'invoicedate' exists per your sample.
@@ -240,10 +267,13 @@ if 'customerid' in raw.columns:
 # --------------------------------------------------
 # Cleaning (light)
 # --------------------------------------------------
+
+
 def clean_record(df):
     df = df.copy()
     # normalize column names
-    df.columns = [c.replace(" ", "").replace("_", "").lower() for c in df.columns]
+    df.columns = [c.replace(" ", "").replace("_", "").lower()
+                  for c in df.columns]
     rename = {
         'invoice': 'invoiceno',
         'invoiceno': 'invoiceno',
@@ -271,7 +301,8 @@ def clean_record(df):
         df['customerid'] = df.index.astype(str)
     # numeric cleanup
     if 'quantity' in df.columns and 'price' in df.columns:
-        df['quantity'] = pd.to_numeric(df['quantity'], errors='coerce').fillna(0)
+        df['quantity'] = pd.to_numeric(
+            df['quantity'], errors='coerce').fillna(0)
         df['price'] = pd.to_numeric(df['price'], errors='coerce').fillna(0.0)
         df = df[(df['quantity'] > 0) & (df['price'] > 0)]
     # description
@@ -279,10 +310,12 @@ def clean_record(df):
         df['description'] = df['description'].astype(str).str.strip()
     # sales
     if 'totalprice' in df.columns:
-        df['sales'] = pd.to_numeric(df['totalprice'], errors='coerce').fillna(0.0)
+        df['sales'] = pd.to_numeric(
+            df['totalprice'], errors='coerce').fillna(0.0)
     else:
         df['sales'] = df['quantity'] * df['price']
     return df.reset_index(drop=True)
+
 
 with st.spinner("Cleaning data..."):
     df = clean_record(raw)
@@ -306,13 +339,15 @@ st.subheader("Key Metrics")
 col1, col2, col3, col4 = st.columns(4)
 col1.metric("Total Sales", f"₹{df['sales'].sum():,.0f}")
 col2.metric("Unique Customers", df['customerid'].nunique())
-col3.metric("Orders", df['invoiceno'].nunique() if 'invoiceno' in df.columns else len(df))
+col3.metric("Orders", df['invoiceno'].nunique()
+            if 'invoiceno' in df.columns else len(df))
 col4.metric("Repeat Rate", f"{retention_rate(df)*100:.1f}%")
 
 # --------------------------------------------------
 # Tabs
 # --------------------------------------------------
-tab_forecast, tab_customer, tab_top, tab_boom = st.tabs(["Forecasting", "Customer Analytics", "Top Products & Retention", "Product Boom"])
+tab_forecast, tab_customer, tab_top, tab_boom = st.tabs(
+    ["Forecasting", "Customer Analytics", "Top Products & Retention", "Product Boom"])
 
 # -------------------------
 # TAB: Forecasting
@@ -322,36 +357,47 @@ with tab_forecast:
     st.header("Forecasting — Product-level")
     st.markdown("<div class='card-meta'>Enter product ID (stockcode) or description substring. Train SARIMAX (short-term) & XGBoost (long-term).</div>", unsafe_allow_html=True)
 
-    product_input = st.text_input("Product ID (stockcode) or description substring", value="", key="prod_input")
+    product_input = st.text_input(
+        "Product ID (stockcode) or description substring", value="", key="prod_input")
     if product_input:
-        mask = (df.get('stockcode','').astype(str) == product_input) | df['description'].str.contains(product_input, case=False, na=False)
+        mask = (df.get('stockcode', '').astype(str) == product_input) | df['description'].str.contains(
+            product_input, case=False, na=False)
         prod_df = df[mask]
         if prod_df.empty:
             st.warning("No product matches that input.")
         else:
             st.subheader(f"Product sample: {prod_df['description'].iloc[0]}")
             weekly = prepare_weekly_series(prod_df)
-            st.plotly_chart(px.line(weekly, x='ds', y='y', title='Weekly Sales'), use_container_width=True)
+            st.plotly_chart(px.line(weekly, x='ds', y='y',
+                            title='Weekly Sales'), use_container_width=True)
             if len(weekly) < 8:
-                st.warning("Not enough weekly history (~8+ weeks recommended) to train models.")
+                st.warning(
+                    "Not enough weekly history (~8+ weeks recommended) to train models.")
             else:
                 if st.button("Train SARIMAX + XGBoost for product"):
                     with st.spinner("Training models..."):
                         sar_res = train_sarimax(weekly)
                         sar_preds = forecast_sarimax(sar_res, steps=4)
                         xgb_model, xgb_feats = train_xgb(weekly)
-                        xgb_preds = forecast_xgb(xgb_model, weekly, xgb_feats, steps=4)
+                        xgb_preds = forecast_xgb(
+                            xgb_model, weekly, xgb_feats, steps=4)
                         last_week = weekly['ds'].max()
-                        future_weeks = [last_week + timedelta(weeks=i+1) for i in range(4)]
-                        forecast_df = pd.DataFrame({'ds': future_weeks, 'SARIMAX': sar_preds, 'XGBoost': xgb_preds})
-                        st.session_state['product_forecast'] = {'product': product_input, 'forecast': forecast_df, 'weekly': weekly}
+                        future_weeks = [last_week +
+                                        timedelta(weeks=i+1) for i in range(4)]
+                        forecast_df = pd.DataFrame(
+                            {'ds': future_weeks, 'SARIMAX': sar_preds, 'XGBoost': xgb_preds})
+                        st.session_state['product_forecast'] = {
+                            'product': product_input, 'forecast': forecast_df, 'weekly': weekly}
                     st.success("Models trained and stored in session.")
                 if 'product_forecast' in st.session_state and st.session_state['product_forecast']['product'] == product_input:
                     fo = st.session_state['product_forecast']['forecast']
                     weekly = st.session_state['product_forecast']['weekly']
-                    combined = pd.concat([weekly.rename(columns={'y':'Actual'}).set_index('ds'), fo.set_index('ds')], axis=0).reset_index()
-                    cols = [c for c in ['Actual','SARIMAX','XGBoost'] if c in combined.columns]
-                    st.plotly_chart(px.line(combined, x='ds', y=cols, title='Historical + Forecast'), use_container_width=True)
+                    combined = pd.concat([weekly.rename(columns={'y': 'Actual'}).set_index(
+                        'ds'), fo.set_index('ds')], axis=0).reset_index()
+                    cols = [c for c in ['Actual', 'SARIMAX',
+                                        'XGBoost'] if c in combined.columns]
+                    st.plotly_chart(px.line(
+                        combined, x='ds', y=cols, title='Historical + Forecast'), use_container_width=True)
                     st.dataframe(fo)
 
     st.markdown("</div>", unsafe_allow_html=True)
@@ -365,22 +411,26 @@ with tab_customer:
     st.markdown("<div class='card-meta'>Enter Customer ID to see profile (recency, frequency, monetary), top 50 products, and assign coupon/discount for their segment.</div>", unsafe_allow_html=True)
 
     # Ensure customerid strings are normalized (this is the key fix)
-    df['customerid'] = df['customerid'].astype(str).str.replace('.0$', '', regex=True).str.strip()
+    df['customerid'] = df['customerid'].astype(
+        str).str.replace('.0$', '', regex=True).str.strip()
 
     cust_input = st.text_input("Customer ID", value="", key="cust_input")
     if cust_input:
         cid = str(cust_input).strip()
         cust_df = df[df['customerid'] == cid]
         if cust_df.empty:
-            st.warning("Customer not found. Make sure you entered the ID without decimals (e.g., 13085 not 13085.0).")
+            st.warning(
+                "Customer not found. Make sure you entered the ID without decimals (e.g., 13085 not 13085.0).")
             # show a few closest candidates to help user
             try:
                 unique_ids = df['customerid'].unique().astype(str)
                 import difflib
-                matches = difflib.get_close_matches(cid, unique_ids, n=8, cutoff=0.6)
+                matches = difflib.get_close_matches(
+                    cid, unique_ids, n=8, cutoff=0.6)
                 if matches:
                     st.info("Close matches (select to view):")
-                    sel = st.selectbox("Close matches", ["None"] + matches, key="close_matches")
+                    sel = st.selectbox("Close matches", [
+                                       "None"] + matches, key="close_matches")
                     if sel and sel != "None":
                         cust_df = df[df['customerid'] == sel]
                         cid = sel
@@ -410,25 +460,34 @@ with tab_customer:
 
                 st.markdown("---")
                 st.subheader("Top 50 Products Purchased by Customer")
-                top50 = cust_df.groupby('stockcode').agg({'sales':'sum','description':'first','quantity':'sum'}).reset_index().sort_values('sales', ascending=False).head(50)
+                top50 = cust_df.groupby('stockcode').agg({'sales': 'sum', 'description': 'first', 'quantity': 'sum'}).reset_index(
+                ).sort_values('sales', ascending=False).head(50)
                 st.dataframe(top50)
                 if not top50.empty:
-                    st.plotly_chart(px.bar(top50.head(15), x='stockcode', y='sales', hover_data=['description','quantity'], title=f"Top products for {cid}"), use_container_width=True)
-                    st.download_button("Download Top 50 CSV", data=top50.to_csv(index=False).encode('utf-8'), file_name=f"top50_customer_{cid}.csv")
+                    st.plotly_chart(px.bar(top50.head(15), x='stockcode', y='sales', hover_data=[
+                                    'description', 'quantity'], title=f"Top products for {cid}"), use_container_width=True)
+                    st.download_button("Download Top 50 CSV", data=top50.to_csv(
+                        index=False).encode('utf-8'), file_name=f"top50_customer_{cid}.csv")
 
                 st.markdown("---")
-                st.subheader("CRM: Assign Discount & Coupon for this customer's segment")
+                st.subheader(
+                    "CRM: Assign Discount & Coupon for this customer's segment")
                 if 'offers' not in st.session_state:
                     st.session_state['offers'] = {}
                 if seg_label not in st.session_state['offers']:
-                    st.session_state['offers'][seg_label] = {'discount_pct': 10, 'coupon': f'{seg_label}_10OFF'}
+                    st.session_state['offers'][seg_label] = {
+                        'discount_pct': 10, 'coupon': f'{seg_label}_10OFF'}
                 dcol, ccol = st.columns(2)
                 with dcol:
-                    disc = st.number_input(f"Discount % for {seg_label}", min_value=0, max_value=100, value=st.session_state['offers'][seg_label]['discount_pct'], key=f"disc_{seg_label}")
+                    disc = st.number_input(f"Discount % for {seg_label}", min_value=0, max_value=100,
+                                           value=st.session_state['offers'][seg_label]['discount_pct'], key=f"disc_{seg_label}")
                 with ccol:
-                    coupon = st.text_input(f"Coupon for {seg_label}", value=st.session_state['offers'][seg_label]['coupon'], key=f"coupon_{seg_label}")
-                st.session_state['offers'][seg_label] = {'discount_pct': int(disc), 'coupon': coupon}
-                st.info(f"Segment {seg_label} → Discount: {disc}%  Coupon: {coupon}")
+                    coupon = st.text_input(
+                        f"Coupon for {seg_label}", value=st.session_state['offers'][seg_label]['coupon'], key=f"coupon_{seg_label}")
+                st.session_state['offers'][seg_label] = {
+                    'discount_pct': int(disc), 'coupon': coupon}
+                st.info(
+                    f"Segment {seg_label} → Discount: {disc}%  Coupon: {coupon}")
 
     else:
         st.info("Enter Customer ID to begin (e.g., 13085)")
@@ -447,9 +506,11 @@ with tab_top:
     st.subheader("Top products (last 60 days)")
     st.dataframe(top_prods.head(50))
     if not top_prods.empty:
-        st.plotly_chart(px.bar(top_prods.head(10), x=top_prods.columns[0], y='sales', title="Top 10 products (60d)"), use_container_width=True)
+        st.plotly_chart(px.bar(top_prods.head(
+            10), x=top_prods.columns[0], y='sales', title="Top 10 products (60d)"), use_container_width=True)
         best = top_prods.iloc[0]
-        st.success(f"Top product (60d): {best[top_prods.columns[0]]} — Sales: {best['sales']:.2f}")
+        st.success(
+            f"Top product (60d): {best[top_prods.columns[0]]} — Sales: {best['sales']:.2f}")
 
     rr = retention_rate(df)
     st.metric("Repeat purchase rate", f"{rr*100:.2f}%")
@@ -461,20 +522,25 @@ with tab_top:
 with tab_boom:
     st.markdown("<div class='dashboard-box'>", unsafe_allow_html=True)
     st.header("Product Boom Prediction")
-    st.markdown("<div class='card-meta'>Use XGBoost to forecast and rank growth candidates.</div>", unsafe_allow_html=True)
+    st.markdown("<div class='card-meta'>Use XGBoost to forecast and rank growth candidates.</div>",
+                unsafe_allow_html=True)
 
     try:
         candidates = df['stockcode'].astype(str).value_counts().index.tolist()
     except Exception:
-        candidates = df['description'].astype(str).value_counts().index.tolist()
+        candidates = df['description'].astype(
+            str).value_counts().index.tolist()
 
-    sel = st.multiselect("Select products to forecast", options=candidates, default=candidates[:10])
-    horizon = st.number_input("Forecast horizon (weeks)", min_value=1, max_value=52, value=4)
+    sel = st.multiselect("Select products to forecast",
+                         options=candidates, default=candidates[:10])
+    horizon = st.number_input(
+        "Forecast horizon (weeks)", min_value=1, max_value=52, value=4)
     if st.button("Run product boom predictions"):
         results = []
         with st.spinner("Forecasting..."):
             for p in sel:
-                sub = df[(df.get('stockcode','').astype(str) == str(p)) | (df['description'] == p)]
+                sub = df[(df.get('stockcode', '').astype(str)
+                          == str(p)) | (df['description'] == p)]
                 if len(sub) < 30:
                     continue
                 weekly_p = prepare_weekly_series(sub)
@@ -482,18 +548,23 @@ with tab_boom:
                     continue
                 try:
                     model_p, feats_p = train_xgb(weekly_p)
-                    preds_p = forecast_xgb(model_p, weekly_p, feats_p, steps=horizon)
-                    past = weekly_p['y'].tail(horizon).sum() if len(weekly_p) >= horizon else weekly_p['y'].sum()
+                    preds_p = forecast_xgb(
+                        model_p, weekly_p, feats_p, steps=horizon)
+                    past = weekly_p['y'].tail(horizon).sum() if len(
+                        weekly_p) >= horizon else weekly_p['y'].sum()
                     future = float(np.sum(preds_p))
                     growth = (future - past) / (past + 1e-9) * 100
-                    results.append({'product': str(p), 'past_sum': past, 'future_sum': future, 'growth_pct': growth})
+                    results.append({'product': str(
+                        p), 'past_sum': past, 'future_sum': future, 'growth_pct': growth})
                 except Exception:
                     continue
-        res_df = pd.DataFrame(results).sort_values('growth_pct', ascending=False)
+        res_df = pd.DataFrame(results).sort_values(
+            'growth_pct', ascending=False)
         st.dataframe(res_df.head(50))
         if not res_df.empty:
             topc = res_df.iloc[0]
-            st.success(f"Top predicted boom product: {topc['product']} (+{topc['growth_pct']:.1f}%)")
+            st.success(
+                f"Top predicted boom product: {topc['product']} (+{topc['growth_pct']:.1f}%)")
 
     st.markdown("</div>", unsafe_allow_html=True)
 
@@ -502,7 +573,8 @@ with tab_boom:
 # -------------------------
 st.markdown("<br>", unsafe_allow_html=True)
 with st.expander("Exports & Data Integrity"):
-    st.download_button("Download cleaned CSV", data=df.to_csv(index=False).encode('utf-8'), file_name="cleaned_online_retail_cleaned.csv")
+    st.download_button("Download cleaned CSV", data=df.to_csv(index=False).encode(
+        'utf-8'), file_name="cleaned_online_retail_cleaned.csv")
     if raw_bytes:
         st.write("SHA256 (uploaded/demo):")
         st.code(file_hash)
